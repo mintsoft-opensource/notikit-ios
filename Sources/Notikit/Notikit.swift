@@ -25,20 +25,17 @@ public struct NotikitError: Error, CustomStringConvertible {
 public final class Notikit {
     private let baseUrl: String
     private let apiKey: String
-    private let apiSecret: String?
     private let transport: NotikitHTTPTransport
 
-    public init(baseUrl: String, apiKey: String, apiSecret: String? = nil, transport: NotikitHTTPTransport? = nil) {
+    public init(baseUrl: String, apiKey: String, transport: NotikitHTTPTransport? = nil) {
         self.baseUrl = baseUrl.hasSuffix("/") ? String(baseUrl.dropLast()) : baseUrl
         self.apiKey = apiKey
-        self.apiSecret = apiSecret
         self.transport = transport ?? URLSessionTransport()
     }
 
     @discardableResult
     private func post(_ path: String, _ body: [String: Any]) async throws -> [String: Any] {
-        var headers = ["content-type": "application/json", "api-key": apiKey]
-        if let secret = apiSecret { headers["api-secret"] = secret }
+        let headers = ["content-type": "application/json", "api-key": apiKey]
 
         let compact = body.filter { !($0.value is NSNull) }
         let data = try JSONSerialization.data(withJSONObject: compact)
