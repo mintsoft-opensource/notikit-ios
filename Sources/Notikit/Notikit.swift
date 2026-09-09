@@ -84,6 +84,32 @@ public final class Notikit {
     public func subscribe(topic: String, token: String) async throws -> [String: Any] {
         return try await post("/api/v1/topics/subscribe", ["topic": topic, "token": token])
     }
+
+    /// 디바이스 바인딩 해제 (로그아웃/계정전환).
+    /// 해제하지 않으면 이후 클릭이 이전 계정에 계속 귀속된다.
+    @discardableResult
+    public func unbindDevice(token: String, platform: String) async throws -> [String: Any] {
+        let body: [String: Any] = ["token": token, "platform": platform, "external_id": NSNull()]
+        return try await post("/api/v1/devices", body)
+    }
+
+    /// 푸시 클릭(알림 탭) 보고.
+    /// 유저는 서버가 토큰의 바인딩에서 해석하므로 externalId 를 보내지 않는다.
+    @discardableResult
+    public func reportClick(logId: String, token: String, destination: String? = nil) async throws -> [String: Any] {
+        var body: [String: Any] = ["log_id": logId, "token": token]
+        if let d = destination { body["destination"] = d }
+        return try await post("/api/v1/messages/click", body)
+    }
+
+    /// 푸시 페이로드에서 notikit 이 예약해 쓰는 data 키
+    public static let logIdKey = "notikit_log_id"
+
+    /// APNs userInfo 에서 발송 id 추출 — 없으면 notikit 발송이 아니다
+    public static func logId(fromPayload userInfo: [AnyHashable: Any]) -> String? {
+        guard let v = userInfo[logIdKey] as? String, !v.isEmpty else { return nil }
+        return v
+    }
 }
 
 final class URLSessionTransport: NotikitHTTPTransport {
