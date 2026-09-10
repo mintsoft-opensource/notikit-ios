@@ -33,12 +33,18 @@ public final class Notikit {
         self.transport = transport ?? URLSessionTransport()
     }
 
+    /// 미지정(NSNull) 필드를 제거하고 전송 — 서버가 기존 값을 유지하게 한다.
     @discardableResult
     private func post(_ path: String, _ body: [String: Any]) async throws -> [String: Any] {
+        return try await postRaw(path, body.filter { !($0.value is NSNull) })
+    }
+
+    /// NSNull 을 그대로 실어 전송 — 명시적 해제(external_id: null)와 미지정을 구분해야 할 때.
+    @discardableResult
+    private func postRaw(_ path: String, _ body: [String: Any]) async throws -> [String: Any] {
         let headers = ["content-type": "application/json", "api-key": apiKey]
 
-        let compact = body.filter { !($0.value is NSNull) }
-        let data = try JSONSerialization.data(withJSONObject: compact)
+        let data = try JSONSerialization.data(withJSONObject: body)
         guard let url = URL(string: baseUrl + path) else {
             throw NotikitError(message: "Invalid URL", status: 0)
         }
@@ -88,9 +94,13 @@ public final class Notikit {
     /// 디바이스 바인딩 해제 (로그아웃/계정전환).
     /// 해제하지 않으면 이후 클릭이 이전 계정에 계속 귀속된다.
     @discardableResult
-    public func unbindDevice(token: String, platform: String) async throws -> [String: Any] {
-        let body: [String: Any] = ["token": token, "platform": platform, "external_id": NSNull()]
-        return try await post("/api/v1/devices", body)
+    public func unbindDevice(token: String, platform: String, identityHash: String? = nil) async throws -> [String: Any] {
+        var body: [String: Any] = ["token": token, "platform": platform, "external_id": NSNull()]
+        // 서버가 현재 바인딩된 유저의 해시를 검증한다 — 남의 토큰으로 해제하는 것을 막는다
+        if let h = identityHash { body["identity_hash"] = h }
+        // post 는 NSNull 을 제거하므로 명시적 해제는 raw 경로로 보낸다 —
+        // 제거되면 external_id 없는 일반 업서트가 되어 바인딩이 그대로 남는다
+        return try await postRaw("/api/v1/devices", body)
     }
 
     /// 푸시 클릭(알림 탭) 보고.
