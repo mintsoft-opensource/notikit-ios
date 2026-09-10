@@ -119,6 +119,26 @@ public final class Notikit {
         return try await post("/api/v1/messages/click", body)
     }
 
+    /// 알림 탭 처리 — APNs userInfo 를 그대로 넘기면 된다.
+    ///
+    /// 탭 이벤트는 `UNUserNotificationCenterDelegate.userNotificationCenter(_:didReceive:withCompletionHandler:)`
+    /// 로 들어오는데, 델리게이트는 앱이 하나만 가질 수 있어 SDK 가 가져가면 앱 것을 빼앗는다.
+    /// 그래서 델리게이트는 앱이 유지하고 이 메서드만 호출한다:
+    ///
+    ///     func userNotificationCenter(_ c: UNUserNotificationCenter,
+    ///                                 didReceive response: UNNotificationResponse) async {
+    ///         try? await notikit.handleNotificationOpen(response.notification.request.content.userInfo, token: token)
+    ///     }
+    ///
+    /// notikit 이 보낸 알림이 아니면 아무 것도 하지 않는다 — 다른 경로의 알림까지
+    /// 클릭으로 세면 클릭률이 부풀려진다.
+    @discardableResult
+    public func handleNotificationOpen(_ userInfo: [AnyHashable: Any], token: String, destination: String? = nil) async throws -> Bool {
+        guard let logId = Notikit.logId(fromPayload: userInfo) else { return false }
+        try await reportClick(logId: logId, token: token, destination: destination)
+        return true
+    }
+
     /// 푸시 페이로드에서 notikit 이 예약해 쓰는 data 키
     public static let logIdKey = "notikit_log_id"
 
