@@ -34,3 +34,17 @@ try await notikit.registerDevice(
 
 ## 라이선스
 Apache-2.0
+
+## 알림 탭 자동 보고
+
+`UNUserNotificationCenter.delegate` 는 앱당 하나뿐이라 SDK 가 차지하면 앱(또는
+Firebase)이 쓰던 델리게이트가 끊긴다. 그래서 가로채지 않고 **앞에 끼운다** — 우리가
+먼저 클릭을 기록하고 원래 델리게이트로 그대로 넘긴다.
+
+```swift
+// Firebase 설정 이후에 호출해야 기존 델리게이트가 체인에 들어간다
+Notikit.installNotificationDelegate(client: notikit) { currentFcmToken }
+```
+
+토큰은 갱신되므로 값이 아니라 클로저로 넘긴다. 클릭 보고는 백그라운드로 띄우고
+완료 핸들러를 붙잡지 않는다 — 붙잡으면 네트워크가 느릴 때 탭 반응이 늦어진다.
