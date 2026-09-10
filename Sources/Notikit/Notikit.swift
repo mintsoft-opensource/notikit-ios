@@ -86,6 +86,13 @@ public final class Notikit {
         return try await post("/api/v1/users/identify", body)
     }
 
+    /// 앱 열림 보고 — 접속 통계(DAU/WAU/MAU)의 원천.
+    /// registerDevice 는 무거우므로 앱을 열 때마다는 이쪽을 쓴다.
+    @discardableResult
+    public func ping(token: String) async throws -> [String: Any] {
+        return try await post("/api/v1/devices/ping", ["token": token])
+    }
+
     @discardableResult
     public func subscribe(topic: String, token: String) async throws -> [String: Any] {
         return try await post("/api/v1/topics/subscribe", ["topic": topic, "token": token])
