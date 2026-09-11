@@ -149,34 +149,45 @@ public actor NotikitSession {
 
         let now = Date().timeIntervalSince1970
         let current = getUser()?.externalId
-        var failed: [[String: Any]] = []
+        // 스냅샷으로 큐를 덮어쓰지 않는다. actor 는 await 에서 **재진입**하므로,
+        // 아래 네트워크 대기 중에 들어온 클릭이 스냅샷에는 없다 — 덮어쓰면 그 클릭이
+        // 보내지지도 않은 채 사라진다. 지울 것만 모았다가 마지막에 빼낸다.
+        var done = Set<String>()
         var sent = 0
 
         for c in queue {
             guard let logId = c["logId"] as? String, let token = c["token"] as? String else { continue }
-            if now - ((c["at"] as? TimeInterval) ?? 0) >= Self.queueTTL { continue } // 오래된 클릭은 버린다
+            let key = "\(logId)|\(token)"
+
+            if now - ((c["at"] as? TimeInterval) ?? 0) >= Self.queueTTL {
+                done.insert(key) // 오래된 클릭은 버린다
+                continue
+            }
 
             // 지금 보내면 다음 사람에게 귀속되므로 보내지 않되, **버리지도 않는다**.
             // 비로그인 탭이 큐에 남았다가 로그인하면 어긋나는데, 여기서 폐기하면
             // 그 클릭이 영영 사라진다. TTL 이 수명을 제한한다.
-            let owner = c["externalId"] as? String
-            if owner != current {
-                failed.append(c)
-                continue
-            }
+            if (c["externalId"] as? String) != current { continue }
 
             do {
                 _ = try await client.reportClick(logId: logId, token: token, destination: c["destination"] as? String)
+                done.insert(key)
                 sent += 1
             } catch let e as NotikitError {
                 // 4xx 는 재시도해도 같다(토큰 교체로 404 등) — 7일간 두드리지 않고 버린다
-                if e.status < 400 || e.status >= 500 || e.status == 429 { failed.append(c) }
+                if e.status >= 400, e.status < 500, e.status != 429 { done.insert(key) }
             } catch {
-                failed.append(c)
+                // 네트워크 오류 — 큐에 남겨 다음에 재시도한다
             }
         }
 
-        writeQueue(failed)
+        guard !done.isEmpty else { return sent }
+        // 지금 시점의 큐를 다시 읽어 처리한 것만 빼낸다 — flush 중 들어온 건은 남는다
+        let remaining = readQueue().filter { c in
+            guard let l = c["logId"] as? String, let t = c["token"] as? String else { return true }
+            return !done.contains("\(l)|\(t)")
+        }
+        writeQueue(remaining)
         return sent
     }
 
