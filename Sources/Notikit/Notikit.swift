@@ -1,6 +1,6 @@
 import Foundation
 
-public struct NotikitHTTPResponse {
+public struct NotikitHTTPResponse: Sendable {
     public let status: Int
     public let body: Data
     public init(status: Int, body: Data) {
@@ -9,12 +9,38 @@ public struct NotikitHTTPResponse {
     }
 }
 
-/// 테스트/커스텀을 위한 HTTP 추상화
-public protocol NotikitHTTPTransport {
+/// 테스트/커스텀을 위한 HTTP 추상화.
+///
+/// `Sendable` 은 지금 붙여야 한다. Swift 6 로 넘어간 뒤에 붙이면 기존 구현체가 전부 깨진다.
+public protocol NotikitHTTPTransport: Sendable {
     func post(url: URL, headers: [String: String], body: Data) async throws -> NotikitHTTPResponse
 }
 
-public struct NotikitError: Error, CustomStringConvertible {
+/// 등록된 디바이스.
+///
+/// 공개 API 가 `[String: Any]` 를 돌려주면 Swift 6 에서 막힌다 — `Any` 는 Sendable 이 될 수
+/// 없어 async 반환값으로 격리 경계를 넘지 못한다. 나중에 바꾸면 시그니처 파괴이므로
+/// 처음부터 구체 타입으로 둔다.
+public struct NotikitDevice: Sendable {
+    public let id: String
+    public let token: String
+    public let platform: String
+    public let userId: String?
+    public let isActive: Bool
+
+    init?(json: [String: Any]) {
+        guard let id = json["id"] as? String,
+              let token = json["token"] as? String,
+              let platform = json["platform"] as? String else { return nil }
+        self.id = id
+        self.token = token
+        self.platform = platform
+        self.userId = json["userId"] as? String
+        self.isActive = (json["isActive"] as? Bool) ?? true
+    }
+}
+
+public struct NotikitError: Error, CustomStringConvertible, Sendable {
     public let message: String
     public let status: Int
     public var description: String { "NotikitError(\(status)): \(message)" }
@@ -22,12 +48,12 @@ public struct NotikitError: Error, CustomStringConvertible {
 
 /// Notikit Swift SDK — 유저 중심 푸시 등록/식별.
 /// APNs/FCM 토큰은 앱이 획득하고, 이 SDK 가 서버에 등록한다. (api-key 공개키만)
-public final class Notikit {
+public final class Notikit: Sendable {
     private let baseUrl: String
     private let apiKey: String
-    private let transport: NotikitHTTPTransport
+    private let transport: any NotikitHTTPTransport
 
-    public init(baseUrl: String, apiKey: String, transport: NotikitHTTPTransport? = nil) {
+    public init(baseUrl: String, apiKey: String, transport: (any NotikitHTTPTransport)? = nil) {
         self.baseUrl = baseUrl.hasSuffix("/") ? String(baseUrl.dropLast()) : baseUrl
         self.apiKey = apiKey
         self.transport = transport ?? URLSessionTransport()
@@ -67,7 +93,7 @@ public final class Notikit {
         identityHash: String? = nil,
         locale: String? = nil,
         timezone: String? = nil
-    ) async throws -> [String: Any] {
+    ) async throws -> NotikitDevice {
         var body: [String: Any] = ["token": token, "platform": platform]
         if let ext = externalId {
             body["external_id"] = ext
@@ -75,48 +101,63 @@ public final class Notikit {
         }
         if let l = locale { body["locale"] = l }
         if let tz = timezone { body["timezone"] = tz }
-        return try await post("/api/v1/devices", body)
+        let data = try await post("/api/v1/devices", body)
+        guard let d = data["device"] as? [String: Any], let device = NotikitDevice(json: d) else {
+            throw NotikitError(message: "Malformed device response", status: 0)
+        }
+        return device
     }
 
-    @discardableResult
-    public func identify(externalId: String, identityHash: String? = nil, attributes: [String: Any]? = nil) async throws -> [String: Any] {
+    public func identify(externalId: String, identityHash: String? = nil, attributes: [String: String]? = nil) async throws {
         var body: [String: Any] = ["external_id": externalId]
         if let h = identityHash { body["identity_hash"] = h }
         if let a = attributes { body["attributes"] = a }
-        return try await post("/api/v1/users/identify", body)
+        try await post("/api/v1/users/identify", body)
     }
 
     /// 앱 열림 보고 — 접속 통계(DAU/WAU/MAU)의 원천.
     /// registerDevice 는 무거우므로 앱을 열 때마다는 이쪽을 쓴다.
     @discardableResult
-    public func ping(token: String) async throws -> [String: Any] {
-        return try await post("/api/v1/devices/ping", ["token": token])
+    public func ping(token: String) async throws -> Bool {
+        let data = try await post("/api/v1/devices/ping", ["token": token])
+        return (data["recorded"] as? Bool) ?? false
     }
 
-    @discardableResult
-    public func subscribe(topic: String, token: String) async throws -> [String: Any] {
-        return try await post("/api/v1/topics/subscribe", ["topic": topic, "token": token])
+    public func subscribe(topic: String, token: String) async throws {
+        try await post("/api/v1/topics/subscribe", ["topic": topic, "token": token])
     }
 
     /// 디바이스 바인딩 해제 (로그아웃/계정전환).
     /// 해제하지 않으면 이후 클릭이 이전 계정에 계속 귀속된다.
-    @discardableResult
-    public func unbindDevice(token: String, platform: String, identityHash: String? = nil) async throws -> [String: Any] {
+    public func unbindDevice(token: String, platform: String, identityHash: String? = nil) async throws {
         var body: [String: Any] = ["token": token, "platform": platform, "external_id": NSNull()]
         // 서버가 현재 바인딩된 유저의 해시를 검증한다 — 남의 토큰으로 해제하는 것을 막는다
         if let h = identityHash { body["identity_hash"] = h }
         // post 는 NSNull 을 제거하므로 명시적 해제는 raw 경로로 보낸다 —
         // 제거되면 external_id 없는 일반 업서트가 되어 바인딩이 그대로 남는다
-        return try await postRaw("/api/v1/devices", body)
+        try await postRaw("/api/v1/devices", body)
     }
 
     /// 푸시 클릭(알림 탭) 보고.
     /// 유저는 서버가 토큰의 바인딩에서 해석하므로 externalId 를 보내지 않는다.
     @discardableResult
-    public func reportClick(logId: String, token: String, destination: String? = nil) async throws -> [String: Any] {
+    public func reportClick(logId: String, token: String, destination: String? = nil) async throws -> Bool {
         var body: [String: Any] = ["log_id": logId, "token": token]
         if let d = destination { body["destination"] = d }
-        return try await post("/api/v1/messages/click", body)
+        let data = try await post("/api/v1/messages/click", body)
+        return (data["recorded"] as? Bool) ?? false
+    }
+
+    /// 푸시 토큰 교체.
+    ///
+    /// 새 토큰으로 registerDevice 를 부르면 **행이 하나 더 생겨** 같은 사람에게 중복
+    /// 발송된다. 서버가 기존 행을 제자리 갱신하게 해 토픽 구독·클릭 이력을 보존한다.
+    @discardableResult
+    public func rotateToken(oldToken: String, newToken: String, identityHash: String? = nil) async throws -> Bool {
+        var body: [String: Any] = ["old_token": oldToken, "new_token": newToken]
+        if let h = identityHash { body["identity_hash"] = h }
+        let data = try await post("/api/v1/devices/rotate", body)
+        return (data["rotated"] as? Bool) ?? false
     }
 
     /// 알림 탭 처리 — APNs userInfo 를 그대로 넘기면 된다.
@@ -135,7 +176,7 @@ public final class Notikit {
     @discardableResult
     public func handleNotificationOpen(_ userInfo: [AnyHashable: Any], token: String, destination: String? = nil) async throws -> Bool {
         guard let logId = Notikit.logId(fromPayload: userInfo) else { return false }
-        try await reportClick(logId: logId, token: token, destination: destination)
+        _ = try await reportClick(logId: logId, token: token, destination: destination)
         return true
     }
 
@@ -149,7 +190,7 @@ public final class Notikit {
     }
 }
 
-final class URLSessionTransport: NotikitHTTPTransport {
+final class URLSessionTransport: NotikitHTTPTransport, Sendable {
     func post(url: URL, headers: [String: String], body: Data) async throws -> NotikitHTTPResponse {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"

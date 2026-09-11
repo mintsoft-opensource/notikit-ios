@@ -1,7 +1,7 @@
 import XCTest
 @testable import Notikit
 
-final class FakeTransport: NotikitHTTPTransport {
+final class FakeTransport: NotikitHTTPTransport, @unchecked Sendable {
     let status: Int
     let body: Data
     var lastURL: URL?
@@ -23,10 +23,12 @@ final class FakeTransport: NotikitHTTPTransport {
 
 final class NotikitTests: XCTestCase {
     func testRegisterDeviceSendsApiKeyAndPayload() async throws {
-        let fake = FakeTransport(status: 201, json: #"{"success":true,"data":{"device":{}},"error":null}"#)
+        let fake = FakeTransport(status: 201, json: #"{"success":true,"data":{"device":{"id":"d1","token":"t1","platform":"ios","isActive":true}},"error":null}"#)
         let notikit = Notikit(baseUrl: "https://push.test/", apiKey: "nk_test", transport: fake)
 
-        _ = try await notikit.registerDevice(token: "t1", platform: "ios", externalId: "u1", identityHash: "h")
+        let device = try await notikit.registerDevice(token: "t1", platform: "ios", externalId: "u1", identityHash: "h")
+        XCTAssertEqual(device.id, "d1")
+        XCTAssertEqual(device.platform, "ios")
 
         XCTAssertEqual(fake.lastURL?.absoluteString, "https://push.test/api/v1/devices")
         XCTAssertEqual(fake.lastHeaders?["api-key"], "nk_test")
@@ -38,7 +40,7 @@ final class NotikitTests: XCTestCase {
     func testOmitsApiSecretWhenNotProvided() async throws {
         let fake = FakeTransport(status: 200, json: #"{"success":true,"data":{},"error":null}"#)
         let notikit = Notikit(baseUrl: "https://push.test", apiKey: "nk", transport: fake)
-        _ = try await notikit.subscribe(topic: "news", token: "t1")
+        try await notikit.subscribe(topic: "news", token: "t1")
         XCTAssertNil(fake.lastHeaders?["api-secret"])
     }
 
@@ -46,7 +48,7 @@ final class NotikitTests: XCTestCase {
         let fake = FakeTransport(status: 401, json: #"{"success":false,"data":null,"error":"Unauthorized"}"#)
         let notikit = Notikit(baseUrl: "https://push.test", apiKey: "nk", transport: fake)
         do {
-            _ = try await notikit.identify(externalId: "u1")
+            try await notikit.identify(externalId: "u1")
             XCTFail("should throw")
         } catch let e as NotikitError {
             XCTAssertEqual(e.status, 401)
