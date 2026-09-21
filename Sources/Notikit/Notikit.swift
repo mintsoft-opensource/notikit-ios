@@ -123,8 +123,17 @@ public final class Notikit: Sendable {
         return (data["recorded"] as? Bool) ?? false
     }
 
+    /// 토픽 구독. 규칙으로 채워지는 토픽은 명단이 자동으로 정해지므로 409 가 온다.
     public func subscribe(topic: String, token: String) async throws {
         try await post("/api/v1/topics/subscribe", ["topic": topic, "token": token])
+    }
+
+    /// 토픽 구독 해지.
+    ///
+    /// 알림 설정 토글을 끄는 경로다. 이게 없으면 유저가 한 번 켠 토픽을 앱에서 끌 수 없다.
+    /// 구독과 달리 없는 토픽을 만들지 않는다 — 없으면 404.
+    public func unsubscribe(topic: String, token: String) async throws {
+        try await post("/api/v1/topics/unsubscribe", ["topic": topic, "token": token])
     }
 
     /// 디바이스 바인딩 해제 (로그아웃/계정전환).
