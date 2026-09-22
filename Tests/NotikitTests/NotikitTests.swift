@@ -56,4 +56,19 @@ final class NotikitTests: XCTestCase {
             XCTFail("wrong error type")
         }
     }
+
+    func testCustomDataSkipsNotikitFcmAndApnsKeys() {
+        let userInfo: [AnyHashable: Any] = [
+            "notikit_log_id": "log1",
+            "deep_link": "myapp://orders",
+            "aps": ["alert": ["title": "t"]],
+            "google.c.a.e": "1",
+            "gcm.message_id": "x",
+            "order_id": "A-1",
+            "screen": "order",
+        ]
+        XCTAssertEqual(Notikit.customData(fromPayload: userInfo), ["order_id": "A-1", "screen": "order"])
+        XCTAssertEqual(Notikit.deepLink(fromPayload: userInfo), "myapp://orders")
+        XCTAssertEqual(Notikit.customData(fromPayload: [:]), [:])
+    }
 }

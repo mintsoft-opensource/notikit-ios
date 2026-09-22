@@ -197,6 +197,30 @@ public final class Notikit: Sendable {
         guard let v = userInfo[logIdKey] as? String, !v.isEmpty else { return nil }
         return v
     }
+
+    /// 푸시 페이로드에서 딥링크 추출
+    public static func deepLink(fromPayload userInfo: [AnyHashable: Any]) -> String? {
+        guard let v = userInfo["deep_link"] as? String, !v.isEmpty else { return nil }
+        return v
+    }
+
+    /// notikit·FCM·APNs 가 쓰는 키. 이것을 뺀 나머지가 발송 때 넣은 커스텀 필드다(서버의 금지 키 목록과 같다).
+    private static let internalKeys: Set<String> = [
+        "deep_link", logIdKey, "title", "body", "icon",
+        "aps", "from", "collapse_key", "notification", "message_type", "fcm_options",
+    ]
+    private static let internalPrefixes = ["google.", "gcm."]
+
+    /// 발송 때 넣은 커스텀 필드(템플릿 필드 포함)만 골라낸다. 알림 탭의 `userInfo` 를 그대로 넘기면 된다.
+    public static func customData(fromPayload userInfo: [AnyHashable: Any]) -> [String: String] {
+        var out: [String: String] = [:]
+        for (k, v) in userInfo {
+            guard let key = k as? String, let value = v as? String else { continue }
+            if internalKeys.contains(key) || internalPrefixes.contains(where: { key.hasPrefix($0) }) { continue }
+            out[key] = value
+        }
+        return out
+    }
 }
 
 final class URLSessionTransport: NotikitHTTPTransport, Sendable {

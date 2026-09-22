@@ -35,6 +35,9 @@ try await notikit.registerDevice(
 | `identify(externalId:identityHash:attributes:)` | 유저 식별 |
 | `subscribe(topic:token:)` | 토픽 구독 |
 | `rotateToken(oldToken:newToken:identityHash:)` | 토큰 교체 |
+| `unsubscribe(topic:token:)` | 토픽 구독 해지 |
+| `Notikit.customData(fromPayload:)` | 받은 푸시 `userInfo` 에서 커스텀 필드(템플릿 필드 포함)만 꺼내기 |
+| `Notikit.deepLink(fromPayload:)` | 받은 푸시의 딥링크 |
 
 - `apiSecret` 은 서버 전용 — 앱에는 넣지 마세요.
 - 반환 타입은 전부 구체 타입(`NotikitDevice`, `Bool`, `Void`)이다. `[String: Any]` 는
