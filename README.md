@@ -23,7 +23,7 @@ let notikit = Notikit(baseUrl: "https://push.example.com", apiKey: "nk_xxx") // 
 try await notikit.registerDevice(
     token: fcmToken,
     platform: "ios",
-    externalId: "user-123",
+    userId: "user-123", // 고객 서비스의 유저 id
     identityHash: "<서버계산 HMAC>"
 )
 ```
@@ -31,8 +31,8 @@ try await notikit.registerDevice(
 ## API
 | | 설명 |
 |---|---|
-| `registerDevice(token:platform:externalId:identityHash:...)` | 토큰 등록 |
-| `identify(externalId:identityHash:attributes:)` | 유저 식별 |
+| `registerDevice(token:platform:userId:identityHash:...)` | 토큰 등록 |
+| `identify(userId:identityHash:attributes:)` | 유저 식별 |
 | `subscribe(topic:token:)` | 토픽 구독 |
 | `rotateToken(oldToken:newToken:identityHash:)` | 토큰 교체 |
 | `unsubscribe(topic:token:)` | 토픽 구독 해지 |
@@ -40,6 +40,8 @@ try await notikit.registerDevice(
 | `Notikit.deepLink(fromPayload:)` | 받은 푸시의 딥링크 |
 
 - `apiSecret` 은 서버 전용 — 앱에는 넣지 마세요.
+- 유저 id 는 `userId:` 로 넘기고 서버에는 `user_id` 로 전송된다. 이전 이름 `externalId:`
+  (`external_id`) 도 계속 동작하지만 deprecated 다 — 컴파일러가 `userId:` 로 바꾸라고 안내한다.
 - 반환 타입은 전부 구체 타입(`NotikitDevice`, `Bool`, `Void`)이다. `[String: Any]` 는
   Sendable 이 될 수 없어 Swift 6 에서 막힌다.
 
@@ -68,7 +70,7 @@ let session = Notikit.installNotificationDelegate(client: notikit) { currentFcmT
 (최대 50건, 7일 TTL, 4xx 는 즉시 폐기 — Android 와 같은 규칙).
 
 ```swift
-try await session.login(user: NotikitStoredUser(externalId: "user-1", identityHash: hash), token: token)
+try await session.login(user: NotikitStoredUser(userId: "user-1", identityHash: hash), token: token)
 try await session.logout(token: token)
 
 // 토큰이 갱신되면: 새 토큰으로 registerDevice 를 부르면 행이 하나 더 생겨

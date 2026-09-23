@@ -65,7 +65,7 @@ public final class Notikit: Sendable {
         return try await postRaw(path, body.filter { !($0.value is NSNull) })
     }
 
-    /// NSNull 을 그대로 실어 전송 — 명시적 해제(external_id: null)와 미지정을 구분해야 할 때.
+    /// NSNull 을 그대로 실어 전송 — 명시적 해제(user_id: null)와 미지정을 구분해야 할 때.
     @discardableResult
     private func postRaw(_ path: String, _ body: [String: Any]) async throws -> [String: Any] {
         let headers = ["content-type": "application/json", "api-key": apiKey]
@@ -89,14 +89,14 @@ public final class Notikit: Sendable {
     public func registerDevice(
         token: String,
         platform: String,
-        externalId: String? = nil,
+        userId: String? = nil,
         identityHash: String? = nil,
         locale: String? = nil,
         timezone: String? = nil
     ) async throws -> NotikitDevice {
         var body: [String: Any] = ["token": token, "platform": platform]
-        if let ext = externalId {
-            body["external_id"] = ext
+        if let uid = userId {
+            body["user_id"] = uid
             if let h = identityHash { body["identity_hash"] = h }
         }
         if let l = locale { body["locale"] = l }
@@ -108,11 +108,34 @@ public final class Notikit: Sendable {
         return device
     }
 
-    public func identify(externalId: String, identityHash: String? = nil, attributes: [String: String]? = nil) async throws {
-        var body: [String: Any] = ["external_id": externalId]
+    @available(*, deprecated, renamed: "registerDevice(token:platform:userId:identityHash:locale:timezone:)")
+    @discardableResult
+    public func registerDevice(
+        token: String,
+        platform: String,
+        externalId: String?,
+        identityHash: String? = nil,
+        locale: String? = nil,
+        timezone: String? = nil
+    ) async throws -> NotikitDevice {
+        try await registerDevice(
+            token: token, platform: platform, userId: externalId,
+            identityHash: identityHash, locale: locale, timezone: timezone
+        )
+    }
+
+    /// name 은 치환 변수 {{name}} 과 콘솔 표시에 쓰인다
+    public func identify(userId: String, identityHash: String? = nil, attributes: [String: String]? = nil, name: String? = nil) async throws {
+        var body: [String: Any] = ["user_id": userId]
         if let h = identityHash { body["identity_hash"] = h }
+        if let n = name { body["name"] = n }
         if let a = attributes { body["attributes"] = a }
         try await post("/api/v1/users/identify", body)
+    }
+
+    @available(*, deprecated, renamed: "identify(userId:identityHash:attributes:name:)")
+    public func identify(externalId: String, identityHash: String? = nil, attributes: [String: String]? = nil, name: String? = nil) async throws {
+        try await identify(userId: externalId, identityHash: identityHash, attributes: attributes, name: name)
     }
 
     /// 앱 열림 보고 — 접속 통계(DAU/WAU/MAU)의 원천.
@@ -139,16 +162,16 @@ public final class Notikit: Sendable {
     /// 디바이스 바인딩 해제 (로그아웃/계정전환).
     /// 해제하지 않으면 이후 클릭이 이전 계정에 계속 귀속된다.
     public func unbindDevice(token: String, platform: String, identityHash: String? = nil) async throws {
-        var body: [String: Any] = ["token": token, "platform": platform, "external_id": NSNull()]
+        var body: [String: Any] = ["token": token, "platform": platform, "user_id": NSNull()]
         // 서버가 현재 바인딩된 유저의 해시를 검증한다 — 남의 토큰으로 해제하는 것을 막는다
         if let h = identityHash { body["identity_hash"] = h }
         // post 는 NSNull 을 제거하므로 명시적 해제는 raw 경로로 보낸다 —
-        // 제거되면 external_id 없는 일반 업서트가 되어 바인딩이 그대로 남는다
+        // 제거되면 user_id 없는 일반 업서트가 되어 바인딩이 그대로 남는다
         try await postRaw("/api/v1/devices", body)
     }
 
     /// 푸시 클릭(알림 탭) 보고.
-    /// 유저는 서버가 토큰의 바인딩에서 해석하므로 externalId 를 보내지 않는다.
+    /// 유저는 서버가 토큰의 바인딩에서 해석하므로 userId 를 보내지 않는다.
     @discardableResult
     public func reportClick(logId: String, token: String, destination: String? = nil) async throws -> Bool {
         var body: [String: Any] = ["log_id": logId, "token": token]
@@ -206,7 +229,7 @@ public final class Notikit: Sendable {
 
     /// notikit·FCM·APNs 가 쓰는 키. 이것을 뺀 나머지가 발송 때 넣은 커스텀 필드다(서버의 금지 키 목록과 같다).
     private static let internalKeys: Set<String> = [
-        "deep_link", logIdKey, "title", "body", "icon",
+        "deep_link", logIdKey, "title", "body", "icon", "image",
         "aps", "from", "collapse_key", "notification", "message_type", "fcm_options",
     ]
     private static let internalPrefixes = ["google.", "gcm."]

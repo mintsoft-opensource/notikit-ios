@@ -2,12 +2,20 @@ import Foundation
 
 /// 로그인한 유저. `identityHash` 는 고객 서버가 계산한 HMAC 이다.
 public struct NotikitStoredUser: Sendable, Equatable {
-    public let externalId: String
+    public let userId: String
     public let identityHash: String?
-    public init(externalId: String, identityHash: String? = nil) {
-        self.externalId = externalId
+    public init(userId: String, identityHash: String? = nil) {
+        self.userId = userId
         self.identityHash = identityHash
     }
+
+    @available(*, deprecated, renamed: "init(userId:identityHash:)")
+    public init(externalId: String, identityHash: String? = nil) {
+        self.init(userId: externalId, identityHash: identityHash)
+    }
+
+    @available(*, deprecated, renamed: "userId")
+    public var externalId: String { userId }
 }
 
 /// 키-값 영속 저장소. 기본 구현은 `UserDefaults` 를 쓴다.
@@ -68,17 +76,17 @@ public actor NotikitSession {
         guard let raw = storage.get(Self.userKey),
               let data = raw.data(using: .utf8),
               let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let ext = o["externalId"] as? String else { return nil }
-        return NotikitStoredUser(externalId: ext, identityHash: o["identityHash"] as? String)
+              let uid = Self.ownerId(o) else { return nil }
+        return NotikitStoredUser(userId: uid, identityHash: o["identityHash"] as? String)
     }
 
     /// 로그인 — 유저를 저장하고 디바이스를 그 유저에 바인딩한다.
     public func login(user: NotikitStoredUser, token: String) async throws {
-        var o: [String: Any] = ["externalId": user.externalId]
+        var o: [String: Any] = ["userId": user.userId]
         if let h = user.identityHash { o["identityHash"] = h }
         store(Self.userKey, o)
         _ = try await client.registerDevice(
-            token: token, platform: platform, externalId: user.externalId, identityHash: user.identityHash
+            token: token, platform: platform, userId: user.userId, identityHash: user.identityHash
         )
         // 밀린 언바인딩은 **새 바인딩이 서버에 반영된 뒤에만** 버린다. 먼저 지우면
         // 오프라인 로그아웃 후 오프라인 로그인이 실패했을 때 해제 요청이 사라져
@@ -148,7 +156,7 @@ public actor NotikitSession {
         guard !queue.isEmpty else { return 0 }
 
         let now = Date().timeIntervalSince1970
-        let current = getUser()?.externalId
+        let current = getUser()?.userId
         // 스냅샷으로 큐를 덮어쓰지 않는다. actor 는 await 에서 **재진입**하므로,
         // 아래 네트워크 대기 중에 들어온 클릭이 스냅샷에는 없다 — 덮어쓰면 그 클릭이
         // 보내지지도 않은 채 사라진다. 지울 것만 모았다가 마지막에 빼낸다.
@@ -167,7 +175,7 @@ public actor NotikitSession {
             // 지금 보내면 다음 사람에게 귀속되므로 보내지 않되, **버리지도 않는다**.
             // 비로그인 탭이 큐에 남았다가 로그인하면 어긋나는데, 여기서 폐기하면
             // 그 클릭이 영영 사라진다. TTL 이 수명을 제한한다.
-            if (c["externalId"] as? String) != current { continue }
+            if Self.ownerId(c) != current { continue }
 
             do {
                 _ = try await client.reportClick(logId: logId, token: token, destination: c["destination"] as? String)
@@ -193,6 +201,11 @@ public actor NotikitSession {
 
     // MARK: - 내부
 
+    /// 이전 버전은 `externalId` 키로 저장했다 — 업데이트 직후에도 읽히도록 둘 다 본다
+    private static func ownerId(_ o: [String: Any]) -> String? {
+        (o["userId"] as? String) ?? (o["externalId"] as? String)
+    }
+
     private func retryPendingUnbind() async {
         guard let raw = storage.get(Self.unbindKey),
               let data = raw.data(using: .utf8),
@@ -213,7 +226,7 @@ public actor NotikitSession {
 
         var entry: [String: Any] = ["logId": logId, "token": token, "at": Date().timeIntervalSince1970]
         if let d = destination { entry["destination"] = d }
-        if let owner = getUser()?.externalId { entry["externalId"] = owner }
+        if let owner = getUser()?.userId { entry["userId"] = owner }
         queue.append(entry)
 
         if queue.count > Self.queueMax { queue.removeFirst(queue.count - Self.queueMax) }
