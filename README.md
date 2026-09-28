@@ -2,6 +2,8 @@
 
 > Notikit Swift SDK — 유저 중심 푸시 디바이스 등록/식별 (async/await).
 
+[소개](https://notikit.mint-soft.com) · [서버](https://github.com/mintsoft-opensource/notikit) · 다른 SDK: [JS](https://github.com/mintsoft-opensource/notikit-js) · [Android](https://github.com/mintsoft-opensource/notikit-android) · [Flutter](https://github.com/mintsoft-opensource/notikit-flutter)
+
 ## 설치 (SPM)
 ```swift
 .package(url: "https://github.com/mintsoft-opensource/notikit-ios", from: "0.1.0")
