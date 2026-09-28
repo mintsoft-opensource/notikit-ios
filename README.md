@@ -4,12 +4,8 @@
 
 ## 설치 (SPM)
 ```swift
-.package(url: "https://github.com/notikit/notikit-swift", from: "0.1.0")
+.package(url: "https://github.com/mintsoft-opensource/notikit-ios", from: "0.1.0")
 ```
-
-SPM 은 `Package.swift` 가 **리포지토리 루트**에 있어야만 인식한다. 이 소스는 모노리포의
-`sdks/swift` 에 있으므로 배포는 `notikit-swift` 미러 리포에 이 디렉터리를 그대로 올리고
-태그를 다는 방식이다. 모노리포 URL 로는 의존성을 추가할 수 없다.
 
 CocoaPods 는 아직 지원하지 않는다(podspec 미제공).
 
