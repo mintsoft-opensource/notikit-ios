@@ -52,6 +52,8 @@ public final class Notikit: Sendable {
     private let baseUrl: String
     private let apiKey: String
     private let transport: any NotikitHTTPTransport
+    /// 수신 보고 중복 방지 — 재배달된 푸시가 같은 요청을 다시 내보내지 않게 한다
+    private let receipts = NotikitReceiptDedupe()
 
     public init(baseUrl: String, apiKey: String, transport: (any NotikitHTTPTransport)? = nil) {
         self.baseUrl = baseUrl.hasSuffix("/") ? String(baseUrl.dropLast()) : baseUrl
@@ -180,6 +182,33 @@ public final class Notikit: Sendable {
         return (data["recorded"] as? Bool) ?? false
     }
 
+    /// 푸시 **수신** 보고 — 단말이 실제로 알림을 받았다는 사실을 남긴다.
+    ///
+    /// APNs/FCM 접수(발송 성공)는 기기가 꺼져 있어도, 앱이 지워져 있어도 성공한다. 앱이 이걸
+    /// 부르지 않으면 콘솔의 "도달" 칸은 영원히 0 이다. 부르는 자리는 **알림을 받은 순간**이다 —
+    /// `willPresent`(포그라운드)와 Notification Service Extension(백그라운드).
+    ///
+    /// 같은 발송을 두 번 이상 부르면 **요청을 내보내지 않고** `nil` 을 돌려준다(로컬 중복 방지).
+    /// 서버도 `(발송, 기기)` 유니크로 한 번만 센다 — 로컬 기억은 낭비되는 요청을 없애는 쪽이다.
+    ///
+    /// - Returns: 보고했으면 서버가 새로 기록했는지, 이미 보고한 발송이면 `nil`
+    @discardableResult
+    public func reportReceived(logId: String, token: String) async throws -> Bool? {
+        guard receipts.claim(logId) else { return nil }
+        do {
+            let data = try await post("/api/v1/messages/received", ["log_id": logId, "token": token])
+            return (data["recorded"] as? Bool) ?? false
+        } catch let e as NotikitError where e.status >= 400 && e.status < 500 && e.status != 429 {
+            // 4xx 는 다시 보내도 같은 답이다(없는 발송·수신자 아님·형식 오류) — 기억을 유지해
+            // 재배달마다 같은 요청을 반복하지 않는다
+            throw e
+        } catch {
+            // 네트워크 장애·5xx·429 만 풀어 준다 — 다음 배달·재시도 때 다시 보고할 수 있게
+            receipts.release(logId)
+            throw error
+        }
+    }
+
     /// 푸시 토큰 교체.
     ///
     /// 새 토큰으로 registerDevice 를 부르면 **행이 하나 더 생겨** 같은 사람에게 중복
@@ -229,7 +258,7 @@ public final class Notikit: Sendable {
 
     /// notikit·FCM·APNs 가 쓰는 키. 이것을 뺀 나머지가 발송 때 넣은 커스텀 필드다(서버의 금지 키 목록과 같다).
     private static let internalKeys: Set<String> = [
-        "deep_link", logIdKey, "title", "body", "icon", "image",
+        "deep_link", logIdKey, "actions", "title", "body", "icon", "image",
         "aps", "from", "collapse_key", "notification", "message_type", "fcm_options",
     ]
     private static let internalPrefixes = ["google.", "gcm."]
@@ -243,6 +272,42 @@ public final class Notikit: Sendable {
             out[key] = value
         }
         return out
+    }
+}
+
+/// 수신 보고 중복 방지 — "이 발송은 이미 보고했다"를 기억한다(JS SDK 의 ReceiptDedupe 와 같은 규칙).
+///
+/// 프로세스 안에서만 유효한 기억이다. 서버가 이미 최종 판정을 하므로 여기서 놓친 중복은
+/// 낭비된 요청 한 건으로 끝난다. 잘못 기억해서 **보고를 영영 빠뜨리는 쪽**이 더 나쁘다.
+final class NotikitReceiptDedupe: @unchecked Sendable {
+    static let maxSize = 200
+
+    private let lock = NSLock()
+    private var seen = Set<String>()
+    /// 삽입 순서 — 넘치면 가장 오래 전에 본 것부터 버린다
+    private var order: [String] = []
+    private let max: Int
+
+    init(max: Int = NotikitReceiptDedupe.maxSize) {
+        self.max = max
+    }
+
+    /// 처음 보는 발송이면 기억하고 `true`. 이미 본 발송(또는 빈 id)이면 `false`.
+    /// 보고 **전에** 잡아 둔다 — 두 번째 배달이 첫 요청의 응답을 기다리는 사이에 끼어들 수 있다.
+    func claim(_ logId: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard !logId.isEmpty, !seen.contains(logId) else { return false }
+        seen.insert(logId)
+        order.append(logId)
+        if order.count > max { seen.remove(order.removeFirst()) }
+        return true
+    }
+
+    /// 기억을 되돌린다. 다시 시도할 가치가 있는 실패(네트워크·5xx·429)에서만 부른다.
+    func release(_ logId: String) {
+        lock.lock(); defer { lock.unlock() }
+        guard seen.remove(logId) != nil else { return }
+        order.removeAll { $0 == logId }
     }
 }
 

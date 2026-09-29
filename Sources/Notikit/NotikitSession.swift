@@ -114,16 +114,37 @@ public actor NotikitSession {
 
     /// 푸시 토큰 교체. 밀린 클릭의 토큰도 함께 갱신한다 — 안 바꾸면 서버가 기기를
     /// 못 찾아 404 를 주고 4xx 정책에 걸려 전부 버려진다.
+    ///
+    /// 서버는 교체하지 못해도(모르는 옛 토큰, 증명 없는 바인딩 기기, 충돌) 202 에
+    /// `rotated: false` 로 답한다. 그걸 성공으로 보면 새 토큰이 어디에도 등록되지 않아
+    /// 이 기기가 발송에서 통째로 빠진다 — 그래서 새 토큰을 현재 유저로 다시 등록한다.
+    /// 교체·재등록이 **실제로 성공했을 때만** 큐와 밀린 해제를 옮긴다.
     public func rotateToken(oldToken: String, newToken: String) async throws {
-        _ = try await client.rotateToken(
-            oldToken: oldToken, newToken: newToken, identityHash: getUser()?.identityHash
+        guard oldToken != newToken else { return }
+        let user = getUser()
+        let rotated = try await client.rotateToken(
+            oldToken: oldToken, newToken: newToken, identityHash: user?.identityHash
         )
-        var queue = readQueue()
-        guard !queue.isEmpty else { return }
-        for i in queue.indices where (queue[i]["token"] as? String) == oldToken {
-            queue[i]["token"] = newToken
+        if !rotated {
+            _ = try await client.registerDevice(
+                token: newToken, platform: platform, userId: user?.userId, identityHash: user?.identityHash
+            )
         }
-        writeQueue(queue)
+
+        var queue = readQueue()
+        if !queue.isEmpty {
+            for i in queue.indices where (queue[i]["token"] as? String) == oldToken {
+                queue[i]["token"] = newToken
+            }
+            writeQueue(queue)
+        }
+
+        // 제자리 교체면 이전 바인딩도 새 토큰으로 넘어갔으므로 해제 대상도 새 토큰이다.
+        // 재등록이면 옛 행이 이전 바인딩을 그대로 들고 있으니 옛 토큰에 남겨 둔다.
+        if rotated, var pending = readPendingUnbind(), (pending["token"] as? String) == oldToken {
+            pending["token"] = newToken
+            store(Self.unbindKey, pending)
+        }
     }
 
     // MARK: - 클릭
@@ -207,16 +228,22 @@ public actor NotikitSession {
     }
 
     private func retryPendingUnbind() async {
-        guard let raw = storage.get(Self.unbindKey),
-              let data = raw.data(using: .utf8),
-              let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let token = o["token"] as? String else { return }
+        guard let o = readPendingUnbind(), let token = o["token"] as? String else { return }
         do {
             try await client.unbindDevice(token: token, platform: platform, identityHash: o["identityHash"] as? String)
             storage.remove(Self.unbindKey)
+        } catch let e as NotikitError where e.status >= 400 && e.status < 500 && e.status != 429 {
+            // 4xx 는 재시도해도 같다(identity 불일치 403 등) — 영원히 두드리지 않고 버린다
+            storage.remove(Self.unbindKey)
         } catch {
-            // 다음 flush 에서 다시 시도한다
+            // 네트워크 오류·5xx·429 — 다음 flush 에서 다시 시도한다
         }
+    }
+
+    private func readPendingUnbind() -> [String: Any]? {
+        guard let raw = storage.get(Self.unbindKey),
+              let data = raw.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
     private func enqueue(logId: String, token: String, destination: String?) {
